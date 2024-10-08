@@ -4,21 +4,19 @@
 Gets the protocol SMBv1 from all machines available in the domain
 
 Author: Thomas Rodrigues (@L4nzN0t_)
-License:  ########## CHANGE
-Required Dependencies: ########## CHANGE
+Required Dependencies: RSAT Module
+
+VERSION 1.0.1
 
 .DESCRIPTION
 
-Script designed to check the status of SMB1 and SMB2 protocols in a network environment.
-By default it will get only the Windows Server systems.
+Script designed to check the status of SMB1 and SMB2 protocols in a network environment using Windows Remote Managemenet (WinRM).
+By default it will get all the Windows Server systems.
+Log files will be save in the directory C:\temp\_SMBInfo.
 
 .PARAMETER ComputerName
 
 Specify a computer to query for SMB version.
-
-.PARAMETER WindowsVersion
-
-Define the query for Windows clients, servers or all.
 
 #>
 
@@ -27,10 +25,6 @@ Param(
     [Parameter(Mandatory=$false)]
     [string]
     $ComputerName
-
-    # [Parameter(Mandatory=$false)]
-    # [ValidateSet('Desktop','Server','ALL')]
-    # $WindowsVersion
 
 )
 
@@ -178,22 +172,10 @@ try {
     $machines = Get-AdComputer $ComputerName -ErrorAction Stop
   }
 
-  # if ($WindowsVersion -eq "Desktop")
-  # {
-  #   #$CN = "OU=Predio Anexo,OU=STI - Superintendencia de Tecnologia da Informacao,OU=Unidades SEF,OU=EstacaoSegura - Nova Estrutura,OU=SEF,DC=fazenda,DC=mg"
-  #   $machines = Get-AdComputer -Filter {OperatingSystem -like "*Windows 10*" -or OperatingSystem -like "*Windows 11*" -or OperatingSystem -like "*Windows 7*" -or OperatingSystem -like "*Windows 8*" -or OperatingSystem -like "*Windows XP*" -or OperatingSystem -like "*Windows Vista*"} -SearchBase $domainCN | Where-Object {$_.Enabled -eq $True}
-  #   $machines = Get-AdComputer -Filter {OperatingSystem -like "*Windows 10*" -or OperatingSystem -like "*Windows 11*" -or OperatingSystem -like "*Windows 7*" -or OperatingSystem -like "*Windows 8*" -or OperatingSystem -like "*Windows XP*" -or OperatingSystem -like "*Windows Vista*"} -SearchBase $CN | Where-Object {$_.Enabled -eq $True}
-  # }
-
   if ($WindowsVersion -eq "Server")
   {
     $machines = Get-AdComputer -Filter {OperatingSystem -like "*Windows Server*"} -SearchBase $domainCN | Where-Object {$_.Enabled -eq $True}
   }
-
-  # if ($WindowsVersion -eq "ALL")
-  # {
-  #   $machines = Get-AdComputer -Filter {OperatingSystem -like "*Windows*"} -SearchBase $domainCN | Where-Object {$_.Enabled -eq $True}
-  # }
 
     $machinesError = @()
     $machinesSuccess = Invoke-Command -ComputerName $machines.Name -ErrorAction SilentlyContinue -ErrorVariable machinesError -ThrottleLimit 10 -ScriptBlock {Get-SmbServerConfiguration | Select-Object EnableSMB1Protocol,EnableSMB2Protocol}
@@ -244,6 +226,7 @@ try {
     Write-Host "Total machines execution completed = $($machinesSuccess.RunspaceId.Count)" -ForegroundColor Green -BackgroundColor Black
     Write-Host "Total machines execution failed = $($machinesError.Count)" -ForegroundColor Red -BackgroundColor Black
     Write-Host ""
+    Write-Host "Log saved in $logFile" -ForegroundColor Yellow -BackgroundColor Black
     if ($machinesError.Count -eq $machines.SID.Count) {
         exit 1
     }

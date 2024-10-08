@@ -1,6 +1,26 @@
+<#
+.SYNOPSIS
+
+Gets the current user who is authenticating to LDAP
+
+Author: Thomas Rodrigues (@L4nzN0t_)
+Required Dependencies: None
+
+.DESCRIPTION
+
+Gets the current user who is authenticating to LDAP. It does so by using the
+LDAP_SERVER_WHO_AM_I_OID extended operation (MS-ADTS 3.1.1.3.4.2.4
+LDAP_SERVER_WHO_AM_I_OID - https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-adts/faf0b8c6-8c59-439f-ac62-dc4c078ed715).
+
+
+
+#>
+
+
 Clear-Host
-$files = Get-ChildItem -Path C:\Windows\SYSVOL_DFSR\ -Include groups.xml -Recurse
+$files = Get-ChildItem -Path C:\Windows\SYSVOL*\domain\Policies -Include groups.xml -Recurse
 $global:allobj = @()
+$count = 0
 
 function Decrypt
 {
@@ -61,13 +81,10 @@ foreach ($file in $files)
         $guid = $matches[0]
     }
     $gpo = Get-GPO -Guid $guid -ErrorAction SilentlyContinue
+    Write-Host "INFO! GPO Found: '$($gpo.DisplayName)'" -ForegroundColor Yellow -BackgroundColor Black
 
 
-    if (-not $xml.Groups.User.name)
-    {
-
-    }
-    else
+    if ($xml.Groups.User.Properties.cpassword)
     {
         $password = Decrypt $xml.Groups.User.Properties.cpassword
         $obj = [PSCustomObject]@{
@@ -78,6 +95,17 @@ foreach ($file in $files)
             DecryptedPassword =  $password
         }
         $global:allobj += $obj
+    } else {
+        $count += 1
     }
 }
-$global:allobj | Format-Table GPOName, User, CPassword, DecryptedPassword
+
+if ($count -eq $files.Count)
+{
+    Write-Host ""
+    Write-Host "INFO! NO GPO had cpassword attribute enabled" -ForegroundColor Green -BackgroundColor Black
+} else
+{
+    $global:allobj | Format-Table GPOName, User, CPassword, DecryptedPassword
+}
+
