@@ -22,13 +22,29 @@ try {
 try {
     $hosts = Get-VMHost | Where-Object {$_.Parent -like $cluster}
     foreach ($h in $hosts) {
-        $hbas = Get-VMHostHba -VMHost $h
-        
-        $evry += $hbas | Where-Object {$_.Type -eq "FibreChannel"} |Select-Object VMHost,Type,Device,Model,Speed,NodeWorldWideName,PortWorldWideName,Status | Sort VMHost | Format-Table 
-        
+        $hbas = Get-VMHostHba -VMHost $h | Where-Object {$_.Type -eq "FibreChannel"} 
+        $objects = @()
+        foreach ($hba in $hbas)
+        {
+            $nwwn = $hba.NodeWorldWideName.ToString("X")
+            $pwwn = $hba.PortWorldWideName.ToString("X")
+            
+            $object = [pscustomobject]@{
+                Host = $h.Name
+                Type = $hba.Type
+                Device = $hba.Device
+                Model = $hba.Model
+                Speed = $hba.Speed
+                NodeWorldWideName = $nwwn
+                PortWorldWideName = $pwwn
+                Status = $hba.Status
+            }
+            $objects += $object
+        }
+        $evry += $objects
     }
-    $evry | Format-Table 
-    $evry | Out-File $WORKSPACE_FOLDER\vm_wwn_host.txt -Encoding utf8
+    $evry | Sort-Object Host | Format-Table
+    $evry | Export-Csv -Path $WORKSPACE_FOLDER\vm_wwn_host.csv -Encoding utf8 -NoHeader -NoClobber
 } catch {
 
 }
