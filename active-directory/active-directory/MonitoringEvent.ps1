@@ -18,6 +18,9 @@
     .PARAMETER IPAddress
     Specify the IP address to search.
 
+    .PARAMETER Protocol
+    Specify the authentication protocol you want to use: NTLM or Kerberos.
+
     .PARAMETER Wait
     Monitor events in real time.
 
@@ -69,6 +72,10 @@ Param(
     $LogName,
 
     [Parameter(Mandatory=$false)]
+    [string]
+    $Protocol,
+
+    [Parameter(Mandatory=$false)]
     [switch]
     $Oldest,
 
@@ -93,11 +100,28 @@ Param(
 ## FUNCTIONS ##
 ###############
 
+Function VerifyProtocol () {
+    param([string]$protocol)
+
+    if($protocol)
+    {
+        if ($protocol -eq "Kerberos") {
+            return $true
+        } elseif ($protocol -eq "NTLM") {
+            return $true
+        }
+    } else {
+        Write-Error "$_"
+        exit 1
+    }
+}
+
 Function VerifyUserName () {
     param([string]$user)
 
     try {
         $account = Get-ADUser -Identity $user -ErrorAction Stop
+        Write-Host "INFO! User Located - $($account.SamAccountName)" -ForegroundColor Yellow -BackgroundColor Black
         return $account
     }
     catch {
@@ -136,14 +160,46 @@ Function VerifyLogName () {
     }
 }
 
+Function ValidateEvents () {
+    param([psobject]$events)
+    if ($events)
+    {
+        return $true
+    } else {
+        return $false
+    }
+
+}
+
 Function CreateQuery () {
     param(
         [string]$_usersid,
-        [string]$_sam
+        [string]$_sam,
+        [string]$_ip,
+        [string]$_protocol
     )
 
-    # DEFAULT QUERY FOR USER SEARCH
-    $XPath = "((EventData[Data[@Name='TargetUserSid']='$_usersid']) or (EventData[Data[@Name='TargetUserName']='$_sam']) or (EventData[Data[@Name='TargetUserName']='$_sam@FAZENDA.MG']))]"
+    if ((($_usersid) -and ($_sam)) -and $_ip)
+    {
+        $XPath = "*[((EventData[Data[@Name='TargetUserSid']='$_usersid']) or (EventData[Data[@Name='TargetUserName']='$_sam']) or (EventData[Data[@Name='TargetUserName']='$_sam@$dnsRoot'])) and [EventData[Data[@Name='IpAddress']='$IPAddress']]"
+        #$XPath = "*[EventData[Data[@Name='TargetUserSid']='$usersid'] and EventData[Data[@Name='IpAddress']='$IPAddress']]"
+    }
+
+    if (($_usersid) -and ($_sam))
+    {
+        # DEFAULT QUERY FOR USER SEARCH
+        $XPath = "*[((EventData[Data[@Name='TargetUserSid']='$_usersid']) or (EventData[Data[@Name='TargetUserName']='$_sam']) or (EventData[Data[@Name='TargetUserName']='$_sam@$dnsRoot']))]"
+    }
+
+    if ($_ip)
+    {
+        $XPath = "*[EventData[Data[@Name='IpAddress']='$IPAddress']]"
+    }
+
+    if ($_protocol)
+    {
+        $XPath = "*[EventData[Data[@Name='AuthenticationPackageName']='$protocol']]"
+    }
 
     if ($ExcludeEventID) { # EXCLUDE SPECIFIC EVENTS
         $temp = $null
@@ -151,7 +207,7 @@ Function CreateQuery () {
             $temp += "(EventID!=$($ExcludeEventID[$i])) and "
         }
         $temp = $temp.Substring(0, $temp.Length -5)
-        $XPath = "*[System[$temp] and " + $XPath
+        $XPath = "*[System[$temp]] and " + $XPath
     }
 
     elseif($EventID) { # SEARCH FOR SPECIFIC EVENTS
@@ -160,15 +216,37 @@ Function CreateQuery () {
             $temp += "(EventID=$($EventID[$i])) or "
         }
         $temp = $temp.Substring(0, $temp.Length -4)
-        $XPath = "*[System[$temp] and " + $XPath
+        $XPath = "*[System[$temp]] and " + $XPath
     }
 
-    else { # SEARCH ALL EVENTS
-        $XPath = "*[" + $XPath
-    }
+    # else { # SEARCH ALL EVENTS
+    #     $XPath = "*[" + $XPath
+    # }
 
     return $XPath
 
+}
+
+Function CustomObjectLog($recordId, $timeCreated, $machineName, $id, $taskDisplayName, $infoDisplayName, $domain, $accountName, $sourceNetworkAddress, $SourcePort, $AuthPackage, $NTLMVersion, $processName, $description, $shareName) {
+    $properties = [ordered] @{
+        'RecordId' = $recordId
+        'TimeCreated' = $timeCreated
+        'MachineName' = $machineName
+        'Event Id' = $id
+        'TaskDisplayName'=$taskDisplayName
+        'InfoDisplayName'=$infoDisplayName
+        'Domain'=$domain
+        'Account Name'=$accountName
+        'Source Network Address'=$sourceNetworkAddress
+        'Source Port' = $sourcePort
+        'Auth Package' = $authPackage
+        'NTLM Version' = $NTLMVersion
+        'Process' = $processName
+        'Description' = $description
+        'ShareName' = $shareName
+    }
+    $object = New-Object -TypeName psobject -Property $properties
+    return $object
 }
 
 Function WriteData () {
@@ -178,119 +256,591 @@ Function WriteData () {
     {
         foreach ($event in $events) {
             # Extract data from each event
-            $lines = $event.Message -split "`n"
-            $description = $lines[0]
+            $_LOGLINES = $event.Message -split "`n"
 
-            # IP ADDRESS
-            $regexIPv4 = '\b(?:(?:2[0-4][0-9]|25[0-5]|1[0-9]{2}|[1-9]?[0-9])\.){3}(?:2[0-4][0-9]|25[0-5]|1[0-9]{2}|[1-9]?[0-9])\b'
-            $regexIPv6 = '::1\b'
-            $sourceAddress = $lines | Where-Object { $_ -like '*Address:*' }
-            if ($sourceAddress -match $regexIPv4) {
-                $sourceAddress = $matches[0]
-            }
-            elseif ($sourceAddress -match $regexIPv6 ) {
-                $sourceAddress = $matches[0]
-            }
-            else {
-                $sourceAddress = "-"
-            }
-
-            # PORT CONNECTION
-            #$sourcePort = $lines | Where-Object { ($_ -like '*Source Port:*') -or ($_ -like '*Client Port*') }
-            $sourcePort = $lines | Where-Object { $_ -like '*Port:*'}
-            if ($sourcePort) {
-                $sourcePort = ($sourcePort -split ":")[-1].Trim()
-            } else {
-                $sourcePort =  "-"
-            }
-
-            # USERNAME
-            $user = $lines | Where-Object { ($_ -like "*Account Name:*") -and ($_ -notlike "*$*") -and ($_ -notlike "*network*")}
-            if ($user.Count -gt 1) {
-                $user = ($user[0] -split ":")[-1].Trim()
-            }
-            else {
-                $user = ($user -split ":")[-1].Trim()
-            }
-
-            # DOMAIN NAME
-            $domain = ($lines | Where-Object { ($_ -like "*Realm Name:*") -or ($_ -like "*Account Domain:*")})
-
-            # EVENT ID 4738 - A USER ACCOUNT WAS CHANGED
-            if ($event.Id -eq 4738) {
-                $user = ($user[1] -split ":")[-1].Trim() # Get the account of target username
-            }
-
-            # EVENT ID 4740 - A USER ACCOUNT WAS LOCKED OUT
-            if ($event.Id -eq 4740) {
-                $sourceAddress = $lines | Where-Object { $_ -like '*Caller Computer Name:*' }
-                $sourceAddress = ($sourceAddress -split ":")[-1].Trim()
-            }
-
-            # EVENT ID 4768 - A KERBEROS AUTHENTICATION TICKET (TGT) WAS REQUESTED
-            if ($event.Id -eq 4768)
+            if ($event.Id -eq 5140)
             {
-                $domain = ($lines | Where-Object { ($_ -like "*Realm Name:*") })
-                $domain = ($domain -split ":")[-1].Trim()
+                $_recordID = $event.RecordId
+                $_timeCreated = $event.TimeCreated
+                $_machineName = $event.MachineName
+                $_eventID = $event.Id
+                $_TaskDisplayName = $event.TaskDisplayName
+                $_InfoDisplayName = $event.KeywordsDisplayNames
+                $_Domain = (($_LOGLINES | Select-String -Pattern "Account Domain" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_AccountName = (($_LOGLINES | Select-String -Pattern "Account Name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_SourceAddress = (($_LOGLINES | Select-String -Pattern "Source Address" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_SourcePort = (($_LOGLINES | Select-String -Pattern "Source Port" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_ShareName = (($_LOGLINES | Select-String -Pattern "Share Name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_AuthPackage = "-"
+                $_NTLMVersion = "-"
+                $_Process = "-"
+                $_Description = $_LOGLINES[0]
             }
-
-            # EVENT ID 4624 -
-            if ($event.Id -eq 4624 )
+            elseif ($event.Id -eq 4648)
             {
-                $processName = ($lines | Where-Object { ($_ -like "*Process Name:*") })
-                $processName = $processName -replace '.*Process Name:\s+',''
-
-                $authPackage = ($lines | Where-Object { ($_ -like "*Authentication Package:*") })
-                $authPackage = ($authPackage -split ":")[-1].Trim()
+                $_recordID = $event.RecordId
+                $_timeCreated = $event.TimeCreated
+                $_machineName = $event.MachineName
+                $_eventID = $event.Id
+                $_TaskDisplayName = $event.TaskDisplayName
+                $_InfoDisplayName = $event.KeywordsDisplayNames
+                $_Domain = (($_LOGLINES | Select-String -Pattern "Account Domain" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_AccountName = (($_LOGLINES | Select-String -Pattern "Account Name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_SourceAddress = (($_LOGLINES | Select-String -Pattern "Network Address" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_SourcePort = (($_LOGLINES | Select-String -Pattern "Port" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_ShareName = "-"
+                $_AuthPackage = "-"
+                $_NTLMVersion = "-"
+                $_Process = (($_LOGLINES | Select-String -Pattern "Additional Information" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_Description = $_LOGLINES[0]
             }
 
-            #Network Address
-
-            # EVENT ID 4768 - A KERBEROS AUTHENTICATION TICKET (TGT) WAS REQUESTED
-            # if ($event.Id -eq 4768)
-            # {
-            #     $domain = ($lines | Where-Object { ($_ -like "*Realm Name:*") })
-            #     $domain = ($domain -split ":")[-1].Trim()
-            # }
-
-            # if ($event.Id -eq 4771)
-            # {
-            #     $domain = $null
-
-            #     $clientPort = ($lines | Where-Object { ($_ -like "*Client Port:*") })
-            #     $clientPort = ($clientPort -split ":")[-1].Trim()
-            #     $sourcePort = $clientPort
-            # }
-            # else {
-            #     $domain = ($lines | Where-Object { ($_ -like "*Account Domain:*") })[0]
-            #     $domain = ($domain -split ":")[-1].Trim()
-
-            #     $clientAddress = "-"
-            #     $clientPort = "-"
-            # }
-
-            if ($domain) {
-                $domain = ($domain -split ":")[-1].Trim()
-                if($domain -eq "-") {
-                    $account = $user
-                } else {
-                    $account = "$domain\$user"
-                }
-            } else {
-                $account = $user
+            elseif ($event.Id -eq 4624)
+            {
+                $_recordID = $event.RecordId
+                $_timeCreated = $event.TimeCreated
+                $_machineName = $event.MachineName
+                $_eventID = $event.Id
+                $_TaskDisplayName = $event.TaskDisplayName
+                $_InfoDisplayName = $event.KeywordsDisplayNames
+                $_Domain = (($_LOGLINES | Select-String -Pattern "Account Domain" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_AccountName = (($_LOGLINES | Select-String -Pattern "Account Name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_SourceAddress = (($_LOGLINES | Select-String -Pattern "Source Network Address" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_SourcePort = (($_LOGLINES | Select-String -Pattern "Source Port" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_ShareName = "-"
+                $_AuthPackage = (($_LOGLINES | Select-String -Pattern "Authentication Package" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_NTLMVersion = (($_LOGLINES | Select-String -Pattern "Package Name \(NTLM only\)" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_Process = (($_LOGLINES | Select-String -Pattern "Logon Process" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_Description = $_LOGLINES[0]
             }
 
-            # $all += $event | Select-Object RecordId, TimeCreated, MachineName, Id, TaskDisplayName, KeywordsDisplayNames,@{Label="User Account";Expression={"$account"} }, @{Label="Source Network Address";Expression={$sourceAddress} }, @{Label="Source Port";Expression={$sourcePort} }, @{Label="Description";Expression={$description} }, `
-            #     @{Label="Client Address";Expression={$clientAddress} }, @{Label="Client Port";Expression={$clientPort} }
+            elseif ($event.Id -eq 4627)
+            {
+                $_recordID = $event.RecordId
+                $_timeCreated = $event.TimeCreated
+                $_machineName = $event.MachineName
+                $_eventID = $event.Id
+                $_TaskDisplayName = $event.TaskDisplayName
+                $_InfoDisplayName = $event.KeywordsDisplayNames
+                $_Domain = (($_LOGLINES | Select-String -Pattern "Account Domain" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_AccountName = (($_LOGLINES | Select-String -Pattern "Account Name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_SourceAddress = "-"
+                $_SourcePort = "-"
+                $_ShareName = "-"
+                $_AuthPackage = "-"
+                $_NTLMVersion = "-"
+                $_Process = "-"
+                $_Description = $_LOGLINES[0]
+            }
 
-            $all += $event | Select-Object RecordId, TimeCreated, MachineName, Id, TaskDisplayName,@{Label="User Account";Expression={"$account"} }, @{Label="Source Network Address";Expression={$sourceAddress} }, @{Label="Source Port";Expression={$sourcePort} }, ` #@{Label="Description";Expression={$description} }, `
-                @{Label="Auth Package";Expression={$authPackage} }, @{Label="Process";Expression={$processName} }, @{Label="Description";Expression={$description} }
-        }
+            elseif ($event.Id -eq 4634)
+            {
+                $_recordID = $event.RecordId
+                $_timeCreated = $event.TimeCreated
+                $_machineName = $event.MachineName
+                $_eventID = $event.Id
+                $_TaskDisplayName = $event.TaskDisplayName
+                $_InfoDisplayName = $event.KeywordsDisplayNames
+                $_Domain = (($_LOGLINES | Select-String -Pattern "Account Domain" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_AccountName = (($_LOGLINES | Select-String -Pattern "Account Name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_SourceAddress = "-"
+                $_SourcePort = "-"
+                $_ShareName = "-"
+                $_AuthPackage = "-"
+                $_NTLMVersion = "-"
+                $_Process = "-"
+                $_Description = $_LOGLINES[0]
+            }
+
+            elseif ($event.Id -eq 4688)
+            {
+                $_recordID = $event.RecordId
+                $_timeCreated = $event.TimeCreated
+                $_machineName = $event.MachineName
+                $_eventID = $event.Id
+                $_TaskDisplayName = $event.TaskDisplayName
+                $_InfoDisplayName = $event.KeywordsDisplayNames
+                $_Domain = (($_LOGLINES | Select-String -Pattern "Account Domain" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_AccountName = (($_LOGLINES | Select-String -Pattern "Account Name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_SourceAddress = "-"
+                $_SourcePort = "-"
+                $_ShareName = "-"
+                $_AuthPackage = "-"
+                $_NTLMVersion = "-"
+                $_Process = (($_LOGLINES | Select-String -Pattern "New Process Name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_Description = $_LOGLINES[0]
+            }
+
+            elseif ($event.Id -eq 4770)
+            {
+                $_recordID = $event.RecordId
+                $_timeCreated = $event.TimeCreated
+                $_machineName = $event.MachineName
+                $_eventID = $event.Id
+                $_TaskDisplayName = $event.TaskDisplayName
+                $_InfoDisplayName = $event.KeywordsDisplayNames
+                $_Domain = (($_LOGLINES | Select-String -Pattern "Account Domain" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_AccountName = (($_LOGLINES | Select-String -Pattern "Account Name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_SourceAddress = "-"
+                $_SourcePort = "-"
+                $_ShareName = "-"
+                $_AuthPackage = "-"
+                $_NTLMVersion = "-"
+                $_Process = (($_LOGLINES | Select-String -Pattern "Service name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_Description = $_LOGLINES[0]
+            }
+
+            elseif ($event.Id -eq 4768)
+            {
+                $_recordID = $event.RecordId
+                $_timeCreated = $event.TimeCreated
+                $_machineName = $event.MachineName
+                $_eventID = $event.Id
+                $_TaskDisplayName = $event.TaskDisplayName
+                $_InfoDisplayName = $event.KeywordsDisplayNames
+                $_Domain = (($_LOGLINES | Select-String -Pattern "Supplied Realm Name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_AccountName = (($_LOGLINES | Select-String -Pattern "Account Name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_SourceAddress = "-"
+                $_SourcePort = "-"
+                $_ShareName = "-"
+                $_AuthPackage = "-"
+                $_NTLMVersion = "-"
+                $_Process = (($_LOGLINES | Select-String -Pattern "Service name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_Description = $_LOGLINES[0]
+            }
+
+            elseif ($event.Id -eq 4769)
+            {
+                $_recordID = $event.RecordId
+                $_timeCreated = $event.TimeCreated
+                $_machineName = $event.MachineName
+                $_eventID = $event.Id
+                $_TaskDisplayName = $event.TaskDisplayName
+                $_InfoDisplayName = $event.KeywordsDisplayNames
+                $_Domain = (($_LOGLINES | Select-String -Pattern "Account Domain" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_AccountName = (($_LOGLINES | Select-String -Pattern "Account Name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_SourceAddress = "-"
+                $_SourcePort = "-"
+                $_ShareName = "-"
+                $_AuthPackage = "-"
+                $_NTLMVersion = "-"
+                $_Process = (($_LOGLINES | Select-String -Pattern "Service name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_Description = $_LOGLINES[0]
+            }
+
+            else {
+                $_recordID = $event.RecordId
+                $_timeCreated = $event.TimeCreated
+                $_machineName = $event.MachineName
+                $_eventID = $event.Id
+                $_TaskDisplayName = $event.TaskDisplayName
+                $_InfoDisplayName = $event.KeywordsDisplayNames
+                $_Domain = "-"
+                $_AccountName = "-"
+                $_SourceAddress = "-"
+                $_SourcePort = "-"
+                $_ShareName = "-"
+                $_AuthPackage = "-"
+                $_NTLMVersion = "-"
+                $_Process = "-"
+                $_Description = $_LOGLINES[0]
+            }
+
+            $all += CustomObjectLog $_recordID $_timeCreated $_machineName $_eventID $_TaskDisplayName $_InfoDisplayName $_Domain $_AccountName $_SourceAddress $_SourcePort $_AuthPackage $_NTLMVersion $_Process $_Description $_ShareName
+            }
         return $all
     } catch {
         Write-Error $_
     }
+}
 
+Function Start-ParallelJob {
+    param (
+        [string]$ComputerName,
+        [string]$LogName,
+        [string]$Protocol,
+        [string]$UserSID,
+        [string]$SAM,
+        [string]$IPAddress
+    )
+
+    Start-Job -ScriptBlock {
+        param ($ComputerName, $LogName, $Protocol, $UserSID, $SAM, $IPAddress)
+
+        Function Log () {
+            param([pscustomobject]$value,
+                [switch]$Protocol,
+                [switch]$IPAddress,
+                [switch]$User
+            )
+            $dnsRoot = (Get-ADDomain).DnsRoot
+            $path = "\\$dnsRoot\SYSVOL\$dnsRoot\scripts\logs\"
+
+            if (Test-Path $path)
+            {
+                if ($Protocol)
+                {
+                    $fileLog = "logEvents-protocol.txt"
+                }
+                elseif ($IPAddress)
+                {
+                    $fileLog = "logEvents-ip.txt"
+                }
+                elseif ($User)
+                {
+                    $fileLog = "logEvents-user.txt"
+                }
+                $pathLog = $path + $fileLog
+                $value | Export-Csv -Path $pathLog -Encoding UTF8 -Append -NoTypeInformation
+            } else {
+                if ($Protocol)
+                {
+                    $fileLog = "logEvents-protocol.txt"
+                }
+                elseif ($IPAddress)
+                {
+                    $fileLog = "logEvents-ip.txt"
+                }
+                elseif ($User)
+                {
+                    $fileLog = "logEvents-user.txt"
+                }
+                $pathLog = $path + $fileLog
+                New-Item -ItemType File -Name $pathLog
+                $value | Export-Csv -Path $pathLog -Encoding UTF8 -Append -NoTypeInformation
+            }
+
+        }
+
+        Function CustomObjectLog($recordId, $timeCreated, $machineName, $id, $taskDisplayName, $infoDisplayName, $domain, $accountName, $sourceNetworkAddress, $SourcePort, $AuthPackage, $NTLMVersion, $processName, $description, $shareName) {
+            $properties = [ordered] @{
+                'RecordId' = $recordId
+                'TimeCreated' = $timeCreated
+                'MachineName' = $machineName
+                'Event Id' = $id
+                'TaskDisplayName'=$taskDisplayName
+                'InfoDisplayName'=$infoDisplayName
+                'Domain'=$domain
+                'Account Name'=$accountName
+                'Source Network Address'=$sourceNetworkAddress
+                'Source Port' = $sourcePort
+                'Auth Package' = $authPackage
+                'NTLM Version' = $NTLMVersion
+                'Process' = $processName
+                'Description' = $description
+                'ShareName' = $shareName
+            }
+            $object = New-Object -TypeName psobject -Property $properties
+            return $object
+        }
+
+        Function WriteData () {
+            param( [array]$events )
+            $all = @()
+            try
+            {
+                foreach ($event in $events) {
+                    # Extract data from each event
+                    $_LOGLINES = $event.Message -split "`n"
+
+                    if ($event.Id -eq 5140)
+                    {
+                        $_recordID = $event.RecordId
+                        $_timeCreated = $event.TimeCreated
+                        $_machineName = $event.MachineName
+                        $_eventID = $event.Id
+                        $_TaskDisplayName = $event.TaskDisplayName
+                        $_InfoDisplayName = $event.KeywordsDisplayNames
+                        $_Domain = (($_LOGLINES | Select-String -Pattern "Account Domain" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_AccountName = (($_LOGLINES | Select-String -Pattern "Account Name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_SourceAddress = (($_LOGLINES | Select-String -Pattern "Source Address" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_SourcePort = (($_LOGLINES | Select-String -Pattern "Source Port" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_ShareName = (($_LOGLINES | Select-String -Pattern "Share Name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_AuthPackage = "-"
+                        $_NTLMVersion = "-"
+                        $_Process = "-"
+                        $_Description = $_LOGLINES[0]
+                    }
+                    elseif ($event.Id -eq 4648)
+                    {
+                        $_recordID = $event.RecordId
+                        $_timeCreated = $event.TimeCreated
+                        $_machineName = $event.MachineName
+                        $_eventID = $event.Id
+                        $_TaskDisplayName = $event.TaskDisplayName
+                        $_InfoDisplayName = $event.KeywordsDisplayNames
+                        $_Domain = (($_LOGLINES | Select-String -Pattern "Account Domain" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_AccountName = (($_LOGLINES | Select-String -Pattern "Account Name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_SourceAddress = (($_LOGLINES | Select-String -Pattern "Network Address" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_SourcePort = (($_LOGLINES | Select-String -Pattern "Port" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_ShareName = "-"
+                        $_AuthPackage = "-"
+                        $_NTLMVersion = "-"
+                        $_Process = (($_LOGLINES | Select-String -Pattern "Additional Information" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_Description = $_LOGLINES[0]
+                    }
+
+                    elseif ($event.Id -eq 4624)
+                    {
+                        $_recordID = $event.RecordId
+                        $_timeCreated = $event.TimeCreated
+                        $_machineName = $event.MachineName
+                        $_eventID = $event.Id
+                        $_TaskDisplayName = $event.TaskDisplayName
+                        $_InfoDisplayName = $event.KeywordsDisplayNames
+                        $_Domain = (($_LOGLINES | Select-String -Pattern "Account Domain" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_AccountName = (($_LOGLINES | Select-String -Pattern "Account Name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_SourceAddress = (($_LOGLINES | Select-String -Pattern "Source Network Address" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_SourcePort = (($_LOGLINES | Select-String -Pattern "Source Port" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_ShareName = "-"
+                        $_AuthPackage = (($_LOGLINES | Select-String -Pattern "Authentication Package" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_NTLMVersion = (($_LOGLINES | Select-String -Pattern "Package Name \(NTLM only\)" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_Process = (($_LOGLINES | Select-String -Pattern "Logon Process" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_Description = $_LOGLINES[0]
+                    }
+
+                    elseif ($event.Id -eq 4627)
+                    {
+                        $_recordID = $event.RecordId
+                        $_timeCreated = $event.TimeCreated
+                        $_machineName = $event.MachineName
+                        $_eventID = $event.Id
+                        $_TaskDisplayName = $event.TaskDisplayName
+                        $_InfoDisplayName = $event.KeywordsDisplayNames
+                        $_Domain = (($_LOGLINES | Select-String -Pattern "Account Domain" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_AccountName = (($_LOGLINES | Select-String -Pattern "Account Name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_SourceAddress = "-"
+                        $_SourcePort = "-"
+                        $_ShareName = "-"
+                        $_AuthPackage = "-"
+                        $_NTLMVersion = "-"
+                        $_Process = "-"
+                        $_Description = $_LOGLINES[0]
+                    }
+
+                    elseif ($event.Id -eq 4634)
+                    {
+                        $_recordID = $event.RecordId
+                        $_timeCreated = $event.TimeCreated
+                        $_machineName = $event.MachineName
+                        $_eventID = $event.Id
+                        $_TaskDisplayName = $event.TaskDisplayName
+                        $_InfoDisplayName = $event.KeywordsDisplayNames
+                        $_Domain = (($_LOGLINES | Select-String -Pattern "Account Domain" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_AccountName = (($_LOGLINES | Select-String -Pattern "Account Name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_SourceAddress = "-"
+                        $_SourcePort = "-"
+                        $_ShareName = "-"
+                        $_AuthPackage = "-"
+                        $_NTLMVersion = "-"
+                        $_Process = "-"
+                        $_Description = $_LOGLINES[0]
+                    }
+
+                    elseif ($event.Id -eq 4688)
+                    {
+                        $_recordID = $event.RecordId
+                        $_timeCreated = $event.TimeCreated
+                        $_machineName = $event.MachineName
+                        $_eventID = $event.Id
+                        $_TaskDisplayName = $event.TaskDisplayName
+                        $_InfoDisplayName = $event.KeywordsDisplayNames
+                        $_Domain = (($_LOGLINES | Select-String -Pattern "Account Domain" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_AccountName = (($_LOGLINES | Select-String -Pattern "Account Name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_SourceAddress = "-"
+                        $_SourcePort = "-"
+                        $_ShareName = "-"
+                        $_AuthPackage = "-"
+                        $_NTLMVersion = "-"
+                        $_Process = (($_LOGLINES | Select-String -Pattern "New Process Name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_Description = $_LOGLINES[0]
+                    }
+
+                    elseif ($event.Id -eq 4770)
+                    {
+                        $_recordID = $event.RecordId
+                        $_timeCreated = $event.TimeCreated
+                        $_machineName = $event.MachineName
+                        $_eventID = $event.Id
+                        $_TaskDisplayName = $event.TaskDisplayName
+                        $_InfoDisplayName = $event.KeywordsDisplayNames
+                        $_Domain = (($_LOGLINES | Select-String -Pattern "Account Domain" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_AccountName = (($_LOGLINES | Select-String -Pattern "Account Name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_SourceAddress = "-"
+                        $_SourcePort = "-"
+                        $_ShareName = "-"
+                        $_AuthPackage = "-"
+                        $_NTLMVersion = "-"
+                        $_Process = (($_LOGLINES | Select-String -Pattern "Service name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_Description = $_LOGLINES[0]
+                    }
+
+                    elseif ($event.Id -eq 4768)
+                    {
+                        $_recordID = $event.RecordId
+                        $_timeCreated = $event.TimeCreated
+                        $_machineName = $event.MachineName
+                        $_eventID = $event.Id
+                        $_TaskDisplayName = $event.TaskDisplayName
+                        $_InfoDisplayName = $event.KeywordsDisplayNames
+                        $_Domain = (($_LOGLINES | Select-String -Pattern "Supplied Realm Name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_AccountName = (($_LOGLINES | Select-String -Pattern "Account Name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_SourceAddress = "-"
+                        $_SourcePort = "-"
+                        $_ShareName = "-"
+                        $_AuthPackage = "-"
+                        $_NTLMVersion = "-"
+                        $_Process = (($_LOGLINES | Select-String -Pattern "Service name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_Description = $_LOGLINES[0]
+                    }
+
+                    elseif ($event.Id -eq 4769)
+                    {
+                        $_recordID = $event.RecordId
+                        $_timeCreated = $event.TimeCreated
+                        $_machineName = $event.MachineName
+                        $_eventID = $event.Id
+                        $_TaskDisplayName = $event.TaskDisplayName
+                        $_InfoDisplayName = $event.KeywordsDisplayNames
+                        $_Domain = (($_LOGLINES | Select-String -Pattern "Account Domain" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_AccountName = (($_LOGLINES | Select-String -Pattern "Account Name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_SourceAddress = "-"
+                        $_SourcePort = "-"
+                        $_ShareName = "-"
+                        $_AuthPackage = "-"
+                        $_NTLMVersion = "-"
+                        $_Process = (($_LOGLINES | Select-String -Pattern "Service name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_Description = $_LOGLINES[0]
+                    }
+
+                    else {
+                        $_recordID = $event.RecordId
+                        $_timeCreated = $event.TimeCreated
+                        $_machineName = $event.MachineName
+                        $_eventID = $event.Id
+                        $_TaskDisplayName = $event.TaskDisplayName
+                        $_InfoDisplayName = $event.KeywordsDisplayNames
+                        $_Domain = "-"
+                        $_AccountName = "-"
+                        $_SourceAddress = "-"
+                        $_SourcePort = "-"
+                        $_ShareName = "-"
+                        $_AuthPackage = "-"
+                        $_NTLMVersion = "-"
+                        $_Process = "-"
+                        $_Description = $_LOGLINES[0]
+                    }
+
+                    $all += CustomObjectLog $_recordID $_timeCreated $_machineName $_eventID $_TaskDisplayName $_InfoDisplayName $_Domain $_AccountName $_SourceAddress $_SourcePort $_AuthPackage $_NTLMVersion $_Process $_Description $_ShareName
+                    }
+                return $all
+            } catch {
+                Write-Error $_
+            }
+        }
+
+        Function CreateQuery () {
+            param(
+                [string]$_usersid,
+                [string]$_sam,
+                [string]$_ip,
+                [string]$_protocol
+            )
+
+            if ((($_usersid) -and ($_sam)) -and $_ip)
+            {
+                $XPath = "*[((EventData[Data[@Name='TargetUserSid']='$_usersid']) or (EventData[Data[@Name='TargetUserName']='$_sam']) or (EventData[Data[@Name='TargetUserName']='$_sam@$dnsRoot'])) and [EventData[Data[@Name='IpAddress']='$IPAddress']]"
+                #$XPath = "*[EventData[Data[@Name='TargetUserSid']='$usersid'] and EventData[Data[@Name='IpAddress']='$IPAddress']]"
+            }
+
+            if (($_usersid) -and ($_sam))
+            {
+                # DEFAULT QUERY FOR USER SEARCH
+                $XPath = "*[((EventData[Data[@Name='TargetUserSid']='$_usersid']) or (EventData[Data[@Name='TargetUserName']='$_sam']) or (EventData[Data[@Name='TargetUserName']='$_sam@$dnsRoot']))]"
+            }
+
+            if ($_ip)
+            {
+                $XPath = "*[EventData[Data[@Name='IpAddress']='$IPAddress']]"
+            }
+
+            if ($_protocol)
+            {
+                $XPath = "*[EventData[Data[@Name='AuthenticationPackageName']='$protocol']]"
+            }
+
+            if ($ExcludeEventID) { # EXCLUDE SPECIFIC EVENTS
+                $temp = $null
+                for ($i=0;$i -lt $ExcludeEventID.Count; $i++) {
+                    $temp += "(EventID!=$($ExcludeEventID[$i])) and "
+                }
+                $temp = $temp.Substring(0, $temp.Length -5)
+                $XPath = "*[System[$temp]] and " + $XPath
+            }
+
+            elseif($EventID) { # SEARCH FOR SPECIFIC EVENTS
+                $temp = $null
+                for ($i=0;$i -lt $EventID.Count; $i++) {
+                    $temp += "(EventID=$($EventID[$i])) or "
+                }
+                $temp = $temp.Substring(0, $temp.Length -4)
+                $XPath = "*[System[$temp]] and " + $XPath
+            }
+
+            # else { # SEARCH ALL EVENTS
+            #     $XPath = "*[" + $XPath
+            # }
+
+            return $XPath
+
+        }
+
+        if ($Protocol) {
+            $lastRecordID = 0
+            while ($true) {
+                # QUERY
+                $XPath = CreateQuery -_protocol $Protocol
+
+                $_event = Get-WinEvent -ComputerName $ComputerName -FilterXPath $XPath -LogName $LogName -MaxEvents 1 -ErrorAction SilentlyContinue
+                if ($_event.RecordId -eq $lastRecordID) {
+                    continue
+                } else {
+                    $lastRecordID = $_event.RecordId
+                    Log (WriteData $_event) -Protocol
+                }
+            }
+        }
+        elseif ($IPAddress) {
+            $lastRecordID = 0
+            while ($true) {
+                # QUERY
+                $XPath = CreateQuery -_protocol $IPAddress
+
+                $_event = Get-WinEvent -ComputerName $ComputerName -FilterXPath $XPath -LogName $LogName -MaxEvents 1 -ErrorAction SilentlyContinue
+                if ($_event.RecordId -eq $lastRecordID) {
+                    continue
+                } else {
+                    $lastRecordID = $_event.RecordId
+                    Log (WriteData $_event) -IPAddress
+                }
+            }
+        }
+        elseif ($UserSID) {
+            $lastRecordID = 0
+            while ($true) {
+                # QUERY
+                $XPath = CreateQuery -_usersid $UserSID -_sam $SAM
+
+                $_event = Get-WinEvent -ComputerName $ComputerName -FilterXPath $XPath -LogName $LogName -MaxEvents 1 -ErrorAction SilentlyContinue
+                if ($_event.RecordId -eq $lastRecordID) {
+                    continue
+                } else {
+                    $lastRecordID = $_event.RecordId
+                    Log (WriteData $_event) -User
+                }
+            }
+        }
+    } -ArgumentList $ComputerName, $LogName, $Protocol, $UserSID, $SAM, $IPAddress
 }
 
 Function GetEventLogs ()
@@ -298,13 +848,15 @@ Function GetEventLogs ()
     param(
         [string]$logname,
         [string]$ipaddress,
-        [string]$usersid,
+        [string]$protocol,
         [Microsoft.ActiveDirectory.Management.ADAccount]$useraccount,
         [int]$maxevents,
         [switch]$oldest,
         [switch]$wait
     )
     try {
+        ############################################################################################################################################################
+        ### GET EVENTS IN REAL TIME
         if ($wait) {
             Write-Host "INFO! Monitoring..." -ForegroundColor Green -BackgroundColor Black
             if ($useraccount -and $IPAddress)
@@ -312,49 +864,76 @@ Function GetEventLogs ()
 
             }
             elseif ($ipaddress) {
-
+                foreach ($dc in $domainControllers)
+                {
+                    # Exemplo de chamada da função
+                    Start-ParallelJob -ComputerName $dc -LogName $logname -IPAddress $ipaddress
+                }
             }
             elseif ($useraccount) {
                 $usersid = $useraccount.SID.Value
                 $sam = $useraccount.SamAccountName
-                $lastRecordID = 0
-                while ($true)
+                foreach ($dc in $domainControllers)
                 {
-                    $XPath = CreateQuery -_usersid $usersid -_sam $sam
-                    $_event = Get-WinEvent -ComputerName BHEDC216 -FilterXPath $XPath -LogName $logname -MaxEvents 1 -ErrorAction SilentlyContinue
-                    if ($_event.RecordId -eq $lastRecordID) {
-                        continue
-                    } else {
-                        $lastRecordID = $_event.RecordId
-                        $temp = WriteData $_event
-                        $temp | Format-Table -AutoSize -Wrap
-                    }
-
+                    # Exemplo de chamada da função
+                    Start-ParallelJob -ComputerName $dc -LogName $logname -UserSID $usersid -SAM $sam
+                }
+            }
+            elseif ($protocol)
+            {
+                foreach ($dc in $domainControllers)
+                {
+                    # Exemplo de chamada da função
+                    Start-ParallelJob -ComputerName $dc -LogName $logname -Protocol $protocol
                 }
             }
         }
-        elseif($oldest) { ## GET OLDER EVENTS
+        ############################################################################################################################################################
+        ### GET OLDER EVENTS
+        elseif($oldest)
+        {
             Write-Host "INFO! Searching..." -ForegroundColor Yellow -BackgroundColor Black
             $all = @()
             if ($useraccount -and $IPAddress)
             {
-                if ($ExcludeEventID) {
-                    $XPath = "*[System[(EventID!=$ExcludeEventID)]] and [EventData[Data[@Name='TargetUserSid']='$usersid'] and EventData[Data[@Name='IpAddress']='$IPAddress']]"
+                foreach ($dc in $domainControllers)
+                {
+                    $usersid = $useraccount.SID.Value
+                    $sam = $useraccount.SamAccountName
+
+                    $XPath = CreateQuery -_usersid $useraccount -_sam $sam -_ip $ipaddress
+
+                    # if ($ExcludeEventID) {
+                    #     $XPath = "*[System[(EventID!=$ExcludeEventID)]] and [EventData[Data[@Name='TargetUserSid']='$usersid'] and EventData[Data[@Name='IpAddress']='$IPAddress']]"
+                    # }
+                    # elseif($EventID) {
+                    #     $XPath = "*[EventData[Data[@Name='TargetUserSid']='$usersid'] and EventData[Data[@Name='IpAddress']='$IPAddress']]"
+                    # }
+                    # else {
+                    #     $XPath = "*[EventData[Data[@Name='TargetUserSid']='$usersid'] and EventData[Data[@Name='IpAddress']='$IPAddress']]"
+                    # }
+                    $events = Get-WinEvent -ComputerName $dc -FilterXPath $XPath -LogName $logname -MaxEvents $maxevents -ErrorAction SilentlyContinue
+
+                    if ((ValidateEvents $events))
+                    {
+                        $all += WriteData $events
+                    }
                 }
-                elseif($EventID) {
-                    $XPath = "*[EventData[Data[@Name='TargetUserSid']='$usersid'] and EventData[Data[@Name='IpAddress']='$IPAddress']]"
-                }
-                else {
-                    $XPath = "*[EventData[Data[@Name='TargetUserSid']='$usersid'] and EventData[Data[@Name='IpAddress']='$IPAddress']]"
-                }
-                $events = Get-WinEvent -FilterXPath $XPath -LogName $logname -MaxEvents $maxevents -ErrorAction Stop
-                $all += WriteData $events
             }
 
             elseif ($ipaddress) {
-                $XPath = "*[EventData[Data[@Name='IpAddress']='$IPAddress']]"
-                $events = Get-WinEvent -FilterXPath $XPath -LogName $logname -MaxEvents $maxevents -ErrorAction Stop
-                $all += WriteData $events
+                foreach ($dc in $domainControllers)
+                {
+                    # QUERY
+                    $XPath = CreateQuery -_ip $ipaddress
+
+                    $events = Get-WinEvent -ComputerName $dc -FilterXPath $XPath -LogName $logname -MaxEvents $maxevents -ErrorAction SilentlyContinue
+                    if ((ValidateEvents $events))
+                    {
+                        $all += WriteData $events
+                    }
+                }
+
             }
 
             elseif ($useraccount) {
@@ -362,46 +941,38 @@ Function GetEventLogs ()
             $sam = $useraccount.SamAccountName
                 foreach ($dc in $domainControllers) {
 
-                    # DEFAULT QUERY FOR USER SEARCH
-                    $XPath = "((EventData[Data[@Name='TargetUserSid']='$usersid']) or (EventData[Data[@Name='TargetUserName']='$sam']) or (EventData[Data[@Name='TargetUserName']='$sam@FAZENDA.MG']))]"
-
-                    if ($ExcludeEventID) { # EXCLUDE SPECIFIC EVENTS
-                        $temp = $null
-                        for ($i=0;$i -lt $ExcludeEventID.Count; $i++) {
-                            $temp += "(EventID!=$($ExcludeEventID[$i])) and "
-                        }
-                        $temp = $temp.Substring(0, $temp.Length -5)
-                        $XPath = "*[System[$temp] and " + $XPath
-                    }
-
-                    elseif($EventID) { # SEARCH FOR SPECIFIC EVENTS
-                        $temp = $null
-                        for ($i=0;$i -lt $EventID.Count; $i++) {
-                            $temp += "(EventID=$($EventID[$i])) or "
-                        }
-                        $temp = $temp.Substring(0, $temp.Length -4)
-                        $XPath = "*[System[$temp] and " + $XPath
-                    }
-
-                    else { # SEARCH ALL EVENTS
-                        $XPath = "*[" + $XPath
-                    }
+                    # QUERY
+                    $XPath = CreateQuery -_usersid $usersid -_sam $sam
 
                     Write-Host "INFO! Searching in $dc..." -ForegroundColor Yellow -BackgroundColor Black
                     $events = Get-WinEvent -ComputerName $dc -FilterXPath $XPath -LogName $logname -MaxEvents $maxevents -ErrorAction SilentlyContinue
 
-                    if (!($null -eq $events))
+                    if ((ValidateEvents $events))
                     {
                         $all += WriteData $events
                     }
 
                 }
             }
+            elseif ($protocol)
+            {
+                foreach ($dc in $domainControllers)
+                {
+                    # QUERY
+                    $XPath = CreateQuery -_protocol $protocol
+
+                    Write-Host "INFO! Searching in $dc..." -ForegroundColor Yellow -BackgroundColor Black
+                    $events = Get-WinEvent -ComputerName $dc -FilterXPath $XPath -LogName $logname -MaxEvents $maxevents -ErrorAction SilentlyContinue
+
+                    if ((ValidateEvents $events))
+                    {
+                        $all += WriteData $events
+                    }
+                }
+            }
 
             # Write Summary of logs
-            $all | Sort-Object TimeCreated -Descending | Format-Table -AutoSize -Wrap
-            Write-Host ""
-            Write-Host "SUMMARY! Total events: $($all.Count)" -ForegroundColor Yellow -BackgroundColor Black
+            $all
         }
     }
     catch {
@@ -413,6 +984,7 @@ Function GetEventLogs ()
 #########################################################################
 ############################### EXECUTION ###############################
 #########################################################################
+
 
 if ($MaxEvents -eq 0)
 {
@@ -426,20 +998,27 @@ try {
     Write-Error $_.Exception.Message
 }
 
+try {
+    $dnsRoot = (Get-ADDomain).DnsRoot
+} catch {
+    Write-Error $_.Exception.Message
+}
+
+
 if ($Identity -and $IPAddress)
 {
     $userAccount = VerifyUserName $Identity
     $validIP = VerifyIPAddress $IPAddress
     if (($validIP) -and ($userAccount))
     {
-        # WOrk HEre
+        Write-Host "IP and USER" -ForegroundColor Yellow -BackgroundColor Black
 
         if ($Oldest) # Oldest events
         {
-            GetEventLogs -ipaddress $IPAddress -usersid $userAccount.SID.value -logname (VerifyLogName $LogName) -maxevents $MaxEvents -oldest
+            GetEventLogs -ipaddress $IPAddress -useraccount $userAccount -logname (VerifyLogName $LogName) -maxevents $MaxEvents -oldest
         }
         elseif ($Wait) { # Realtime events
-            GetEventLogs -ipaddress $IPAddress -usersid $userAccount.SID.value -logname (VerifyLogName $LogName) -maxevents $MaxEvents -wait
+            GetEventLogs -ipaddress $IPAddress -useraccount $userAccount -logname (VerifyLogName $LogName) -maxevents $MaxEvents -wait
         }
         else {
             Write-Error "Option invalid! Try use -Oldest or -Wait. See Get-Help EventRecord.ps1."
@@ -454,7 +1033,6 @@ if ($Identity -and $IPAddress)
 elseif ($Identity)
 {
     $userAccount = VerifyUserName $Identity
-    Write-Host "INFO! User Located - $($userAccount.SamAccountName)" -ForegroundColor Yellow -BackgroundColor Black
 
     if ($Oldest) # Oldest events
     {
@@ -482,6 +1060,24 @@ elseif ($IPAddress)
         GetEventLogs -ipaddress $IPAddress -logname (VerifyLogName $LogName) -maxevents $MaxEvents -wait
     }
     else {
+        Write-Error "Option invalid! Try use -Oldest or -Wait. See Get-Help EventRecord.ps1."
+        exit 1
+    }
+}
+
+elseif ($Protocol)
+{
+    VerifyProtocol $Protocol | Out-Null
+
+    if ($Oldest)
+    {
+        GetEventLogs -protocol $Protocol -logname (VerifyLogName $LogName) -maxevents $MaxEvents -oldest
+    }
+    elseif ($Wait) {
+        GetEventLogs -protocol $Protocol -logname (VerifyLogName $LogName) -maxevents $MaxEvents -wait
+    }
+    else
+    {
         Write-Error "Option invalid! Try use -Oldest or -Wait. See Get-Help EventRecord.ps1."
         exit 1
     }
