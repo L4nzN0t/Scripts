@@ -29,5 +29,5 @@ try {
     $evry | Format-Table
     $evry | Out-File $WORKSPACE_FOLDER\vm_by_host.txt -Encoding utf8
 } catch {
-
+    Write-Error $_
 }
