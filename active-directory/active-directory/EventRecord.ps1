@@ -474,9 +474,10 @@ Function Start-ParallelJob {
                 [switch]$User
             )
             $dnsRoot = (Get-ADDomain).DnsRoot
-            $path = "\\$dnsRoot\SYSVOL\$dnsRoot\scripts\logs\"
+            $path = "\\$dnsRoot\SYSVOL\$dnsRoot\scripts\"
+            $fullPath = $path + "logs\"
 
-            if (Test-Path $path)
+            if (Test-Path $fullPath)
             {
                 if ($Protocol)
                 {
@@ -490,9 +491,10 @@ Function Start-ParallelJob {
                 {
                     $fileLog = "logEvents-user.txt"
                 }
-                $pathLog = $path + $fileLog
+                $pathLog = $fullPath + $fileLog
                 $value | Export-Csv -Path $pathLog -Encoding UTF8 -Append -NoTypeInformation
             } else {
+                mkdir $fullPath
                 if ($Protocol)
                 {
                     $fileLog = "logEvents-protocol.txt"
@@ -505,7 +507,7 @@ Function Start-ParallelJob {
                 {
                     $fileLog = "logEvents-user.txt"
                 }
-                $pathLog = $path + $fileLog
+                $pathLog = $fullPath + $fileLog
                 New-Item -ItemType File -Name $pathLog
                 $value | Export-Csv -Path $pathLog -Encoding UTF8 -Append -NoTypeInformation
             }
@@ -869,6 +871,7 @@ Function GetEventLogs ()
                     # Exemplo de chamada da função
                     Start-ParallelJob -ComputerName $dc -LogName $logname -IPAddress $ipaddress
                 }
+
             }
             elseif ($useraccount) {
                 $usersid = $useraccount.SID.Value
