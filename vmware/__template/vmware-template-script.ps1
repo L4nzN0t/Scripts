@@ -51,6 +51,7 @@ Certificate (.pfx file) to use during authentication
 
     
     try {
+        Clear-Host
         # Ensure the VMware PowerCLI module is installed and loaded
         Import-Module VMware.VimAutomation.Core
 
@@ -76,13 +77,15 @@ Certificate (.pfx file) to use during authentication
     }
 
     
-
-
     # SCRIPT EXECUTION
     try {
         
     } catch {
 
     } finally {
-
+        # Disconnect from vCenter Server
+        Write-Host ""
+        Write-Verbose "Disconnecting from vCenter Server..."
+        Disconnect-VIServer -Server $vCenterServer -Confirm:$false
+        Write-Verbose "Successfully disconnected from vCenter Server."
     }
