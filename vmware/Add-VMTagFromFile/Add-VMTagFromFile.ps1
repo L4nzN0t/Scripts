@@ -1,3 +1,4 @@
+
 <#
 .SYNOPSIS
 
@@ -12,40 +13,24 @@ VERSION 1.0.0
 
 Description
 
-.PARAMETER Server
+.PARAMETER Tag
 
-LDAP server to connect to (likely a Domain Controller)
+Set the tag name 
 
-.PARAMETER AuthType
+.PARAMETER Category
 
-Protocol to use during authentication
-
-.PARAMETER Certificate
-
-Certificate (.pfx file) to use during authentication
+Set the category of the tag 
 
 #>
 [CmdletBinding(DefaultParameterSetName = 'Default')]
 Param(
-    [Parameter(Mandatory=$false)]
+    [Parameter(Mandatory=$true)]
     [string]
-    $Server,
+    $Tag,
 
-    [Parameter(Mandatory=$false)]
-    [ValidateSet('Anonymous','Basic','Negotiate','Ntlm','Digest','Sicily','Dpa','Msn','External','Kerberos')]
-    $AuthType,
-
-    [Parameter(Mandatory=$false, ParameterSetName = 'CertAuth')]
+    [Parameter(Mandatory=$true)]
     [string]
-    $Certificate,
-
-    [Parameter(Mandatory=$false, ParameterSetName = 'CertAuth')]
-    [string]
-    $CertificatePassword,
-
-    [Parameter(Mandatory=$false)]
-    [switch]
-    $UseSSL = $false
+    $Category
 
 )
 
@@ -79,7 +64,16 @@ catch
 
 # SCRIPT EXECUTION
 try {
-    
+    $CATEGORY = $Category
+    $NEW_TAG = $Tag
+
+    $vmsTags = Get-Content  "$WORKSPACE_FOLDER\vms.txt"
+
+    foreach ($vm in $vmsTags)
+    {
+        New-TagAssignment -Tag $NEW_TAG -Entity $vm
+    }
+
 } catch {
     Write-Error $_
 } finally {
