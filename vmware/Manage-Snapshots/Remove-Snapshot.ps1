@@ -134,9 +134,17 @@ catch {
     Write-Error $_
 }
 finally {
-    # Disconnect from vCenter Server
-    Write-Host ""
-    Write-VerboseMessage "Disconnecting from vCenter Server..."
-    Disconnect-VIServer -Server $vCenterServer -Confirm:$false
-    Write-VerboseMessage "Successfully disconnected from vCenter Server."
+    foreach ($vCenter in $vCenters)
+    {
+        try {
+            # Disconnect from vCenter Server
+            Write-Host ""
+            Write-Verbose "Disconnecting from vCenter Server..."
+            Disconnect-VIServer -Server $vCenter -Confirm:$false
+            Write-Verbose "Successfully disconnected from vCenter Server."
+        } catch {
+            Write-Host "[ERROR] Error connecting to vCenter Server: $_" -ForegroundColor Red
+            # exit
+        }
+    }
 }
