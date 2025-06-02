@@ -5,7 +5,7 @@
     Author: Thomas Rodriges (@L4nzN0t_)
     Required Dependencies: RSAT Module
 
-    VERSION: 1.0.0
+    VERSION: 1.0.1
 
     .DESCRIPTION
     Script to search for Windows Events in Domain Controllers.
