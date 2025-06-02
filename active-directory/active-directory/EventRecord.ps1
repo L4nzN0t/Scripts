@@ -390,6 +390,44 @@ Function WriteData () {
                 $_Description = $_LOGLINES[0]
             }
 
+            elseif ($event.Id -eq 4771)
+            {
+                $_recordID = $event.RecordId
+                $_timeCreated = $event.TimeCreated
+                $_machineName = $event.MachineName
+                $_eventID = $event.Id
+                $_TaskDisplayName = $event.TaskDisplayName
+                $_InfoDisplayName = $event.KeywordsDisplayNames
+                $_Domain = "-"
+                $_AccountName = (($_LOGLINES | Select-String -Pattern "Account Name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_SourceAddress = (($_LOGLINES | Select-String -Pattern "Client Address" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_SourcePort = (($_LOGLINES | Select-String -Pattern "Client Port" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_ShareName = "-"
+                $_AuthPackage = "-"
+                $_NTLMVersion = "-"
+                $_Process = (($_LOGLINES | Select-String -Pattern "Service name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_Description = $_LOGLINES[0]
+            }
+
+            elseif ($event.Id -eq 4740)
+            {
+                $_recordID = $event.RecordId
+                $_timeCreated = $event.TimeCreated
+                $_machineName = $event.MachineName
+                $_eventID = $event.Id
+                $_TaskDisplayName = $event.TaskDisplayName
+                $_InfoDisplayName = $event.KeywordsDisplayNames
+                $_Domain = (($_LOGLINES | Select-String -Pattern "Account Domain" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_AccountName = (($_LOGLINES | Select-String -Pattern "Account Name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_SourceAddress = (($_LOGLINES | Select-String -Pattern "Caller Computer Name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                $_SourcePort = "-"
+                $_ShareName = "-"
+                $_AuthPackage = "-"
+                $_NTLMVersion = "-"
+                $_Process = "-"
+                $_Description = $_LOGLINES[0]
+            }
+
             elseif ($event.Id -eq 4768)
             {
                 $_recordID = $event.RecordId
@@ -674,6 +712,44 @@ Function Start-ParallelJob {
                         $_AuthPackage = "-"
                         $_NTLMVersion = "-"
                         $_Process = (($_LOGLINES | Select-String -Pattern "Service name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_Description = $_LOGLINES[0]
+                    }
+
+                    elseif ($event.Id -eq 4771)
+                    {
+                        $_recordID = $event.RecordId
+                        $_timeCreated = $event.TimeCreated
+                        $_machineName = $event.MachineName
+                        $_eventID = $event.Id
+                        $_TaskDisplayName = $event.TaskDisplayName
+                        $_InfoDisplayName = $event.KeywordsDisplayNames
+                        $_Domain = "-"
+                        $_AccountName = (($_LOGLINES | Select-String -Pattern "Account Name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_SourceAddress = (($_LOGLINES | Select-String -Pattern "Client Address" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_SourcePort = (($_LOGLINES | Select-String -Pattern "Client Port" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_ShareName = "-"
+                        $_AuthPackage = "-"
+                        $_NTLMVersion = "-"
+                        $_Process = (($_LOGLINES | Select-String -Pattern "Service name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_Description = $_LOGLINES[0]
+                    }
+
+                    elseif ($event.Id -eq 4740)
+                    {
+                        $_recordID = $event.RecordId
+                        $_timeCreated = $event.TimeCreated
+                        $_machineName = $event.MachineName
+                        $_eventID = $event.Id
+                        $_TaskDisplayName = $event.TaskDisplayName
+                        $_InfoDisplayName = $event.KeywordsDisplayNames
+                        $_Domain = (($_LOGLINES | Select-String -Pattern "Account Domain" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_AccountName = (($_LOGLINES | Select-String -Pattern "Account Name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_SourceAddress = (($_LOGLINES | Select-String -Pattern "Caller Computer Name" | Select-Object -ExpandProperty Line) -split ":")[-1].trim()
+                        $_SourcePort = "-"
+                        $_ShareName = "-"
+                        $_AuthPackage = "-"
+                        $_NTLMVersion = "-"
+                        $_Process = "-"
                         $_Description = $_LOGLINES[0]
                     }
 
