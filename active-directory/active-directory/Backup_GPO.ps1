@@ -2,8 +2,8 @@
 
 # Variables that needs to be changed
 
-$Server = "BHEDC216"
-$Domain = "fazenda.mg"
+$Server = "<dc_server>"
+$Domain = "<domain>"
 $ServerFQDN = "$Server.$Domain"
 $RetentionPeriod = "10"
 $RootBackupFolder = "C:\Backup\GPO\GPOBackups\"
