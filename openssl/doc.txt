@@ -1,0 +1,8 @@
+# openssl genrsa -out private.key 2048
+
+# openssl req -new -key private.key -out request.csr -config openssl_csr.req
+
+# openssl req -text -noout -verify -in request.csr 
+
+# openssl x509 -in .\cert.crt -noout -text
+
