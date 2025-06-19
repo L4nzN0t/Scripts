@@ -6,7 +6,7 @@ What the script does
 Author: Thomas Rodrigues (@L4nzN0t_)
 Required Dependencies: VMware PowerCLI
 
-VERSION 1.0.1
+VERSION 1.0.0
 
 .DESCRIPTION
 
@@ -21,8 +21,14 @@ Username to log in vCenter
 .PARAMETER Password
 Password to log in vCenter
 
+.PARAMETER VMName
+VM name to search for
+
+.PARAMETER OutFile
+File location to output. Default path: current folder. Default format: csv.
+
 .EXAMPLE
-C:/PS> ./template-script.ps1 -Username teste@vsphere.local -Password Password@123 -VCList vclist.txt
+C:/PS> ./Get-VMInfo.ps1 -Username teste@vsphere.local -Password Password@123 -VCList vclist.txt -VMName machine -OutFile result.csv
 
 #>
 [CmdletBinding(DefaultParameterSetName = 'Default')]
@@ -37,7 +43,15 @@ Param(
 
     [Parameter(Mandatory=$true)]
     [securestring]
-    $Password
+    $Password,
+
+    [Parameter(Mandatory=$true)]
+    [string]
+    $VMName,
+
+    [Parameter(Mandatory=$false)]
+    [string]
+    $OutFile
 
 )
 
@@ -92,7 +106,7 @@ class Log {
 try {
     Clear-Host
     # Ensure the VMware PowerCLI module is installed and loaded
-    Import-Module VMware.VimAutomation.Core
+    Import-Module VMware.PowerCLI
 
     # Instance Log class
     $log = "log-" + (Get-date -Format 'yyyyddMM hhmmss' -AsUTC).ToString() + ".log"
@@ -117,7 +131,8 @@ try {
         Write-Host "[ERROR] SCRIPT FAILED TO VALIDATE VCENTER LIST" -ForegroundColor Red
         exit 1
     }
-    
+
+
     Set-PowerCLIConfiguration -Scope User -ParticipateInCEIP $false -Confirm:$false | Out-Null
     $clientLog.LogAppend("INFO", "Set-PowerCLIConfiguration", "LOCAL", $global:user, "Set UserParticipateInCEIP to False")
 
@@ -157,12 +172,86 @@ catch
 #################################################################################################
 ##################################### SCRIPT EXECUTION ##########################################
 try 
-{
+{   
+    $clientLog.LogAppend("INFO", "SEARCHING FOR VMS","LOCAL", $global:user, "Searching according the pattern = *$($VMName)*")
+    Write-Host "[INFO] SEARCHING FOR VMS"
+
+    $all_vms = @()
+    $vms = Get-VM -Name *$VMName*
+    if ($vms.count -gt 0) {
+        $clientLog.LogAppend("INFO", "FOUND VMS","LOCAL", $global:user, "$($vms.count) found")
+        Write-Host "[INFO] FOUND $($vms.count) VMS"
+    } else {
+        $clientLog.LogAppend("INFO", "VM NOT FOUND","LOCAL", $global:user, "No vm matches the corresponding search")
+        Write-Host "[INFO] VM NOT FOUND"
+    }
+    
+    foreach ($vm in $vms) 
+    {
+        for ($i = 0;$i -lt $vm.ExtensionData.Guest.Net.count;$i++)
+        {   
+            $tempObj = [PSCustomObject]@{
+                Name = $vm.Name
+                DNSName = $vm.Guest.HostName
+                OS = $vm.Guest.OSFullName
+                Description = $vm.Notes
+                Status = $vm.PowerState
+                IPAddress = ""
+                MACAddress = ""
+                Network = ""
+                Connected = ""
+            }
+
+            $temp = $vm.ExtensionData.Guest.Net
+
+            if ($temp[$i].IpAddress.Count -lt 1) {
+                if ($null -eq $temp[$i].IpAddress) {
+                    $tempObj.IPAddress = $temp[$i].IpAddress
+                } else {
+                    $tempObj.IPAddress = $temp[$i].IPAddress[0]
+                }
+                
+            } else {
+                $tempObj.IPAddress = $temp[$i].IpAddress -join ","
+            }
+            $tempObj.MACAddress = $temp[$i].MacAddress
+            $tempObj.Network = $temp[$i].Network
+            $tempObj.Connected = $temp[$i].Connected
+            $all_vms += $tempObj
+        }
+        $clientLog.LogAppend("INFO", "[$($vm.Name)] PROCESSED", "LOCAL", $global:user, "Get information from vm.")
+        Write-Host "[INFO] [$($vm.Name)] PROCESSED"
+    }
+
+    $clientLog.LogAppend("INFO", "FINISHED EXTRACTING INFORMATION", "LOCAL", $global:user, "All data was retrieved")
+    Write-Host "[INFO] FINISHED EXTRACTING INFORMATION"
+
+    $clientLog.LogAppend("INFO", "PREPARING TO EXPORT DATA", "LOCAL", $global:user, "Exporting to csv")
+    Write-Host "[INFO] PREPARING TO EXPORT DATA"
+
+    if ($OutFile) {
+        if (!(Test-Path $OutFile)) {
+            $fullPath = "$global:WORKSPACE_FOLDER\$OutFile"
+            $all_vms | Export-Csv -Path $fullPath -Encoding utf8 -Force -NoClobber
+            $clientLog.LogAppend("SUCCESS", "FILE EXPORTED", "LOCAL", $global:user, "File exported to $fullPath")
+            Write-Host "[SUCCESS] FILE EXPORTED - $fullPath" -ForegroundColor Green
+        } 
+        else {
+            $fullPath = $OutFile
+            $all_vms | Export-Csv -Path $fullPath -Encoding utf8 -NoClobber -Force
+            $clientLog.LogAppend("SUCCESS", "FILE EXPORTED", "LOCAL", $global:user, "File exported to $fullPath")
+            Write-Host "[SUCCESS] FILE EXPORTED - $fullPath" -ForegroundColor Green
+        }
+    } 
+    else {
+        $all_vms | Format-Table
+    }
     
 }
 #################################################################################################
 ################################# END SCRIPT EXECUTION ##########################################
 catch {
+    $clientLog.LogAppend("ERROR", "EXECUTION FAIL","LOCAL", $global:user, "$_")
     Write-Error $_
 } finally {
     $clientLog.LogAppend("INFO", "PREPARING TO DISCONNECT VCENTERS","LOCAL", $global:user, "Calculating")
@@ -182,6 +271,6 @@ catch {
         }
     }
 
-    $clientLog.LogAppend("INFO", "ALL VCENTER DISCONNECTIONS", "LOCAL", $global:user, "$($global:DefautVIServers.count) of $($vcenters.count) connected servers")
+    $clientLog.LogAppend("INFO", "ALL VCENTER DISCONNECTIONS", "LOCAL", $global:user, "$($global:sDefautVIServers.count) of $($vcenters.count) connected servers")
     Write-Host "[INFO] DISCONNECTED FROM $($global:DefautVIServers.count) OF $($vcenters.count) VCENTERS"
 }

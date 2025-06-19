@@ -6,7 +6,7 @@ What the script does
 Author: Thomas Rodrigues (@L4nzN0t_)
 Required Dependencies: VMware PowerCLI
 
-VERSION 1.0.1
+VERSION 1.0.0
 
 .DESCRIPTION
 
@@ -21,8 +21,11 @@ Username to log in vCenter
 .PARAMETER Password
 Password to log in vCenter
 
+.PARAMETER OutFile
+File location to output. Default path: current folder. Default format: csv.
+
 .EXAMPLE
-C:/PS> ./template-script.ps1 -Username teste@vsphere.local -Password Password@123 -VCList vclist.txt
+C:/PS> ./template-script.ps1 -Username teste@vsphere.local -Password Password@123 -VCList vclist.txt -OutFile result.csv
 
 #>
 [CmdletBinding(DefaultParameterSetName = 'Default')]
@@ -37,7 +40,11 @@ Param(
 
     [Parameter(Mandatory=$true)]
     [securestring]
-    $Password
+    $Password,
+
+    [Parameter(Mandatory=$false)]
+    [string]
+    $OutFile
 
 )
 
@@ -158,7 +165,44 @@ catch
 ##################################### SCRIPT EXECUTION ##########################################
 try 
 {
-    
+    $clientLog.LogAppend("INFO", "QUERY FOR LICENSE INFORMATION", "LOCAL", $global:user, "Check licenses in each vCenter")
+    Write-Host "[INFO] QUERY FOR LICENSE INFORMATION"
+    # Get the license info from each VC in turn
+    $vSphereLicInfo = @()
+    $ServiceInstance = Get-View ServiceInstance
+    Foreach ($LicenseMan in Get-View ($ServiceInstance | Select-Object -First 1).Content.LicenseManager) {
+        Foreach ($License in ($LicenseMan | Select-Object -ExpandProperty Licenses)) {
+            $Details = "" |Select-Object VC, Name, Key, Total, Used, ExpirationDate , Information
+            $Details.VC = ([Uri]$LicenseMan.Client.ServiceUrl).Host
+            $Details.Name= $License.Name
+            $Details.Key= $License.LicenseKey
+            $Details.Total= $License.Total
+            $Details.Used= $License.Used
+            $Details.Information= $License.Labels | Select-Object -expand Value
+            $Details.ExpirationDate = $License.Properties | Where-Object { $_.key -eq "expirationDate" } | Select-Object -ExpandProperty Value
+            $vSphereLicInfo += $Details
+            $clientLog.LogAppend("INFO", "[$($Details.VC)] PROCESSED", "LOCAL", $global:user, "Processed license information from vcenter $($Details.VC)")
+            Write-Host "[INFO] QUERY FOR LICENSE INFORMATION"
+        }
+    }
+
+    if ($OutFile) {
+        if (!(Test-Path $OutFile)) {
+            $fullPath = "$global:WORKSPACE_FOLDER\$OutFile"
+            $vSphereLicInfo | Export-Csv -Path $fullPath -Encoding utf8 -Force -NoClobber
+            $clientLog.LogAppend("SUCCESS", "FILE EXPORTED", "LOCAL", $global:user, "File exported to $fullPath")
+            Write-Host "[SUCCESS] FILE EXPORTED - $fullPath" -ForegroundColor Green
+        } 
+        else {
+            $fullPath = $OutFile
+            $vSphereLicInfo | Export-Csv -Path $fullPath -Encoding utf8 -NoClobber -Force
+            $clientLog.LogAppend("SUCCESS", "FILE EXPORTED", "LOCAL", $global:user, "File exported to $fullPath")
+            Write-Host "[SUCCESS] FILE EXPORTED - $fullPath" -ForegroundColor Green
+        }
+    } 
+    else {
+        $vSphereLicInfo | Format-Table -AutoSize
+    }
 }
 #################################################################################################
 ################################# END SCRIPT EXECUTION ##########################################
@@ -182,6 +226,8 @@ catch {
         }
     }
 
-    $clientLog.LogAppend("INFO", "ALL VCENTER DISCONNECTIONS", "LOCAL", $global:user, "$($global:DefautVIServers.count) of $($vcenters.count) connected servers")
+    $clientLog.LogAppend("INFO", "ALL VCENTER DISCONNECTIONS", "LOCAL", $global:user, "$($global:sDefautVIServers.count) of $($vcenters.count) connected servers")
     Write-Host "[INFO] DISCONNECTED FROM $($global:DefautVIServers.count) OF $($vcenters.count) VCENTERS"
 }
+
+

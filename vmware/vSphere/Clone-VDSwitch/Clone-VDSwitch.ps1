@@ -6,7 +6,7 @@ What the script does
 Author: Thomas Rodrigues (@L4nzN0t_)
 Required Dependencies: VMware PowerCLI
 
-VERSION 1.0.1
+VERSION 1.0.0
 
 .DESCRIPTION
 
@@ -27,11 +27,11 @@ C:/PS> ./template-script.ps1 -Username teste@vsphere.local -Password Password@12
 #>
 [CmdletBinding(DefaultParameterSetName = 'Default')]
 Param(
-    [Parameter(Mandatory=$true)]
+    [Parameter(Mandatory=$false)]
     [string]
-    $VCList,
+    $vCenter,
 
-    [Parameter(Mandatory=$true)]
+    [Parameter(Mandatory=$false)]
     [string]
     $Username,
 
@@ -100,23 +100,6 @@ try {
 
     # Instance Auth class
     $auth = [Auth]::new($Username,$Password)
-
-    # Test vCenters list is ok
-    if((Test-Path $VCList)) 
-    {
-        $vCenters = (Get-Content -Path "$VCList")
-        $clientLog.LogAppend("INFO", "LOAD VCENTER LIST", "LOCAL", $global:user, "Found $($vCenters.Length) servers")
-    }
-    elseif((Test-Path "$global:WORKSPACE_FOLDER\$VCList")) {
-        $vCenters = (Get-Content -Path "$global:WORKSPACE_FOLDER\$VCList")
-        $clientLog.LogAppend("INFO", "LOAD VCENTER LIST", "LOCAL", $global:user, "Found $($vCenters.Length) servers")
-    }
-    else {
-        $vCenters = (Get-Content -Path "$global:WORKSPACE_FOLDER\$VCList")
-        $clientLog.LogAppend("ERROR", "FAILED TO VALIDATE VCENTER LIST", "LOCAL", $global:user, "Review parameter -VCList")
-        Write-Host "[ERROR] SCRIPT FAILED TO VALIDATE VCENTER LIST" -ForegroundColor Red
-        exit 1
-    }
     
     Set-PowerCLIConfiguration -Scope User -ParticipateInCEIP $false -Confirm:$false | Out-Null
     $clientLog.LogAppend("INFO", "Set-PowerCLIConfiguration", "LOCAL", $global:user, "Set UserParticipateInCEIP to False")
@@ -128,22 +111,20 @@ try {
     $clientLog.LogAppend("INFO", "Set-PowerCLIConfiguration", "LOCAL", $global:user, "Set DefaultVIServerMode to Multiple")
         
     # Connect to each vCenter
-    Write-Host "[INFO] CONNECTING TO VCENTER SERVERS"
-    foreach ($vCenter in $vCenters)
-    {
-        try {
-            Connect-VIServer -Server $vCenter -Credential $auth.credential -Protocol HTTPS -ErrorAction Stop | Out-Null
-            $clientLog.LogAppend("INFO", "CONNECTED TO VCENTER", $vCenter.ToString(), $global:user, "Success authentication")
-            Write-Host "[SUCCESS] CONNECTED TO $($vcenter.ToString())" -ForegroundColor Green
-        } catch {
-            $clientLog.LogAppend("ERROR", "CONNECTION FAIL", $vCenter.ToString(), $global:user, "$_")
-            $reason = ($_.Exception.Message -split 'Connect-VIServer').trim()[1]
-            Write-Host "[ERROR] DISCONNECTED FROM $($vcenter.ToString()): $reason" -ForegroundColor Red
-        }
+    Write-Host "[INFO] CONNECTING TO VCENTER SERVER"
+    
+    try {
+        Connect-VIServer -Server $vCenter -Credential $auth.credential -Protocol HTTPS -ErrorAction Stop | Out-Null
+        $clientLog.LogAppend("INFO", "CONNECTED TO VCENTER", $vCenter.ToString(), $global:user, "Success authentication")
+        Write-Host "[SUCCESS] CONNECTED TO $($vCenter.ToString())" -ForegroundColor Green
+    } catch {
+        $clientLog.LogAppend("ERROR", "CONNECTION FAIL", $vCenter.ToString(), $global:user, "$_")
+        $reason = ($_.Exception.Message -split 'Connect-VIServer').trim()[1]
+        Write-Host "[ERROR] DISCONNECTED FROM $($vCenter.ToString()): $reason" -ForegroundColor Red
     }
 
-    $clientLog.LogAppend("INFO", "ALL VCENTER CONNECTIONS", "LOCAL", $global:user, "$($global:sDefautVIServers.count) of $($vcenters.count) connected servers")
-    Write-Host "[INFO] CONNECTED IN $($global:DefaultVIServers.count) OF $($vcenters.count) VCENTERS"
+    $clientLog.LogAppend("INFO", "ALL VCENTER CONNECTIONS", "LOCAL", $global:user, "$($global:sDefautVIServers.count) of $($vCenter.count) connected servers")
+    Write-Host "[INFO] CONNECTED IN $($global:DefaultVIServers.count) OF $($vCenter.count) VCENTERS"
 }
 catch
 {
@@ -158,7 +139,50 @@ catch
 ##################################### SCRIPT EXECUTION ##########################################
 try 
 {
-    
+    $sws = Get-VDSwitch
+    foreach ($sw in $sws)
+    {
+        $clientLog.LogAppend("INFO", "PREPARE TO CREATE NEW VDS", "LOCAL", $global:user, "")
+        Write-Host "[INFO] PREPARE TO CREATE NEW VDS"
+        
+        # Create the network folder (if it doesn't already exist)
+        $datacenter = Get-Datacenter
+        $folderName = "New Switches"
+
+        $folder = Get-Folder -Name $folderName -ErrorAction SilentlyContinue
+        if (-not $folder) {
+            $folder = New-Folder -Name $folderName -Location ($datacenter | Get-Folder -Name "network" -Type 'Network')
+            $clientLog.LogAppend("INFO", "NEW FOLDER CREATED", "LOCAL", $global:user, "Folder name - $folderName")
+        } else {
+            $clientLog.LogAppend("INFO", "FOLDER ALREADY EXISTS", "LOCAL", $global:user, "Folder name - $folderName")
+            Write-Host "[INFO] FOLDER ALREADY EXISTS - '$folderName'"
+        }
+
+        # Create the new VDS
+        Write-Host "[INFO] VDS CURRENT NAME: $($sw.Name)" -ForegroundColor Cyan
+        $newVDSName = Read-Host "[INFO] VDS NEW NAME"
+        
+        if ($null -eq $newVDSName) {
+            $newVDSName = "New-VDS-$(Get-random)"
+        }
+
+        $clientLog.LogAppend("INFO", "CREATING NEW VDS", "LOCAL", $global:user, "Create new virtual distributed switch - $newVDSName")
+        Write-Host "[INFO] CREATING NEW VDS"
+        $sw | New-VDSwitch -Name $newVDSName -Location $folder | Out-Null
+        Set-VDSwitch -VDSwitch $newVDSName -Version '7.0.3'
+
+        $clientLog.LogAppend("SUCCESS", "NEW VDS CREATED", "LOCAL", $global:user, "New virtual distributed switch created - $newVDSName")
+        Write-Host "[SUCCESS] NEW VDS CREATED" -ForegroundColor Green
+        $nSW = Get-VDSwitch $newVDSName | Out-Null
+
+        $clientLog.LogAppend("SUCCESS", "NEW VDS NAME", "LOCAL", $global:user, "$($nSW.Name)")
+        $clientLog.LogAppend("SUCCESS", "NEW VDS MTU", "LOCAL", $global:user, "$($nSW.Mtu)")
+        $clientLog.LogAppend("SUCCESS", "NEW VDS VERSION", "LOCAL", $global:user, "$($nSW.Version)")
+        Write-Host "[SUCCESS] NEW VDS NAME $($nSW.Name)" -ForegroundColor Green
+        Write-Host "[SUCCESS] NEW VDS MTU $($nSW.Mtu)" -ForegroundColor Green
+        Write-Host "[SUCCESS] NEW VDS VERSION $($nSW.Version)" -ForegroundColor Green
+        Write-Host ""
+    }
 }
 #################################################################################################
 ################################# END SCRIPT EXECUTION ##########################################
@@ -167,21 +191,21 @@ catch {
 } finally {
     $clientLog.LogAppend("INFO", "PREPARING TO DISCONNECT VCENTERS","LOCAL", $global:user, "Calculating")
     Write-Host "[INFO] DISCONNECTING FROM VCENTER SERVERS"
-    foreach ($vCenter in $vCenters)
+    foreach ($vCenter in $global:DefautVIServers)
     {
         try {
             # Disconnect from vCenter Server
-            Disconnect-VIServer -Server $vCenter -Confirm:$false -ErrorAction SilentlyContinue
-            $clientLog.LogAppend("INFO", "VCENTER DISCONNECTED",$vcenter.ToString(), $global:user, "Successfully disconected")
-            Write-Host "[SUCCESS] DISCONNECTED FROM $($vCenter.ToString())" -ForegroundColor Green
+            Disconnect-VIServer -Server $vCenter.Name -Confirm:$false -ErrorAction SilentlyContinue
+            $clientLog.LogAppend("INFO", "VCENTER DISCONNECTED",$vCenter.Name.ToString(), $global:user, "Successfully disconected")
+            Write-Host "[SUCCESS] DISCONNECTED FROM $($vCenter.Name.ToString())" -ForegroundColor Green
         } catch {
-            $clientLog.LogAppend("ERROR", "FAIL TO DISCONNECT FROM VCENTER",$vCenter.ToString(), $global:user, "$_")
+            $clientLog.LogAppend("ERROR", "FAIL TO DISCONNECT FROM VCENTER",$vCenter.Name.ToString(), $global:user, "$_")
             $reason = ($_.Exception.Message -split 'Connect-VIServer').trim()[1]
-            Write-Host "[ERROR] FAIL TO DISCONNECT FROM $($vCenter.ToString()): $reason" -ForegroundColor Red
+            Write-Host "[ERROR] FAIL TO DISCONNECT FROM $($vCenter.Name.ToString()): $reason" -ForegroundColor Red
             # exit
         }
     }
 
-    $clientLog.LogAppend("INFO", "ALL VCENTER DISCONNECTIONS", "LOCAL", $global:user, "$($global:DefautVIServers.count) of $($vcenters.count) connected servers")
-    Write-Host "[INFO] DISCONNECTED FROM $($global:DefautVIServers.count) OF $($vcenters.count) VCENTERS"
+    $clientLog.LogAppend("INFO", "ALL VCENTER DISCONNECTIONS", "LOCAL", $global:user, "$($global:DefautVIServers.count) of $($vCenter.count) connected servers")
+    Write-Host "[INFO] CONNECTED IN $($global:DefautVIServers.count) OF $($vCenter.count) VCENTERS"
 }
