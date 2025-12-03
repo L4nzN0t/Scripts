@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
 
-What the script does
+Clone a VDS switch with all his configs.
 
 Author: Thomas Rodrigues (@L4nzN0t_)
 Required Dependencies: VMware PowerCLI
@@ -22,7 +22,7 @@ Username to log in vCenter
 Password to log in vCenter
 
 .EXAMPLE
-C:/PS> ./template-script.ps1 -Username teste@vsphere.local -Password Password@123 -VCList vclist.txt
+C:/PS> ./Clone-VDSwitch.ps1 -Username teste@vsphere.local -Password Password@123 -VCList vclist.txt
 
 #>
 [CmdletBinding(DefaultParameterSetName = 'Default')]

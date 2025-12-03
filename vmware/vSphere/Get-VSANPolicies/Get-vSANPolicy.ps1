@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
 
-What the script does
+Get the SBPM policies from the vsan datastore
 
 Author: Thomas Rodrigues (@L4nzN0t_)
 Required Dependencies: VMware PowerCLI

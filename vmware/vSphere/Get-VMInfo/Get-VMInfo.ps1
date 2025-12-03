@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
 
-What the script does
+Get a virtual machine info
 
 Author: Thomas Rodrigues (@L4nzN0t_)
 Required Dependencies: VMware PowerCLI

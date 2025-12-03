@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
 
-What the script does
+Search for VMs that doesn`t have the the nic connected at power on.
 
 Author: Thomas Rodrigues (@L4nzN0t_)
 Required Dependencies: VMware PowerCLI
