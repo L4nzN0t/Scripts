@@ -4,6 +4,8 @@ from collections import defaultdict
 from typing import Dict, List, Optional
 from urllib.parse import urljoin
 from os import path
+from os import name as osname
+import getpass
 import csv
 import json
 import re
@@ -30,8 +32,8 @@ def _print_banner():
  | |___| | | |  __/ (__|   <  __/ |                             
   \____|_| |_|\___|\___|_|\_\___|_|                             
 """
-    print("\n")
     print(banner)
+    print("\n")
 
 class AriaOpsClient:
     """Client for interacting with Aria Operations API."""
@@ -294,7 +296,10 @@ class VCFCompatibility:
     
     def export_data(self, data, filename="server_export.csv"):
         script_dir = path.dirname(__file__)
-        filename = script_dir + "\\" + filename
+        if osname == 'nt':
+            filename = script_dir + "\\" + filename
+        elif osname == 'posix':
+            filename = script_dir + "/" + filename
         
         with open(filename, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
@@ -370,6 +375,9 @@ Examples:
     if args.no_verify_ssl:
         import urllib3
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    
+    if not args.password:
+        args.password = getpass.getpass("Enter password: ")
     
     print("[*] Connecting to Aria Operations...")
     aria_client = AriaOpsClient(
