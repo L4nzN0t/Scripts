@@ -1,3 +1,13 @@
+#!/usr/bin/env python3
+"""
+Search for the ESX hosts in Aria Operations and check whether they are compatible with ESX 9.0 in Broadcom Compatibility Guide
+
+Author: Thomas Rodrigues (@L4nzN0t_)
+Required Dependencies:  python3.10 or higher
+                        install requirements
+
+VERSION 1.0.0
+"""
 from colorama import Fore, Style, init
 from tabulate import tabulate
 from collections import defaultdict
