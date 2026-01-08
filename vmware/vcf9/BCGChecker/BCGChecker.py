@@ -337,9 +337,9 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s --host aria.example.com --username admin --password pass123
-  %(prog)s -H aria.example.com -u admin -p pass123 --verbose
-  %(prog)s -H aria.example.com -u admin -p pass123 --no-verify-ssl
+  %(prog)s --host aria.example.com --username admin --password pass123 --domain LOCAL
+  %(prog)s -H aria.example.com -u admin -p pass123 -d domain.com --verbose
+  %(prog)s -H aria.example.com -u admin -p pass123 --domain domain.com --no-verify-ssl
         """
     )
     
