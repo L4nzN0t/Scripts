@@ -6,7 +6,7 @@ Author: Thomas Rodrigues (@L4nzN0t_)
 Required Dependencies:  python3.10 or higher
                         install requirements
 
-VERSION 1.0.0
+VERSION 1.1
 """
 from colorama import Fore, Style, init
 from tabulate import tabulate
