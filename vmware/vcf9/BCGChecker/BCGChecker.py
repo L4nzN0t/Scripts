@@ -25,7 +25,7 @@ import requests
 
 init(autoreset=True)
 
-def _print_banner():
+def _print_banner(version):
     banner = r"""
  __     ______ _____    ___   ___                               
  \ \   / / ___|  ___|  / _ \ / _ \                              
@@ -41,8 +41,12 @@ def _print_banner():
  | |   | '_ \ / _ \/ __| |/ / _ \ '__|                          
  | |___| | | |  __/ (__|   <  __/ |                             
   \____|_| |_|\___|\___|_|\_\___|_|                             
+
 """
     print(banner)
+    text = f'VERSION {version}'
+    print(text)
+    print('-' * len(text))
     print("\n")
 
 class AriaOpsClient:
@@ -163,9 +167,9 @@ class VCFCompatibility:
         self.base_url = "https://compatibilityguide.broadcom.com/compguide/programs/viewResults?limit=20&page=1&sortBy=partnerName&sortType=ASC"
     
     def color_compat(self, compat_list):
-        value = compat_list
         if len(compat_list) > 1:
-            if "ESXi 9.0" in value:
+            value = compat_list
+            if any('ESXi 9' in i for i in value):
                 colored_lines = [f"{Fore.GREEN}{line}{Style.RESET_ALL}" for line in compat_list]
                 compat_str = "\n".join(colored_lines)
                 return compat_str
@@ -183,7 +187,8 @@ class VCFCompatibility:
                 return compat_str
         elif len(compat_list) == 1:
             value = compat_list[0]
-            if "ESXi 9.0" in value:
+            if any('ESXi 9' in i for i in value):
+            #if "ESXi 9" in value:
                 return f"{Fore.GREEN}{value}{Style.RESET_ALL}"
             elif value == "Not Found":
                 return f"{Fore.WHITE}{value}{Style.RESET_ALL}"
@@ -191,6 +196,9 @@ class VCFCompatibility:
                 return f"{Fore.YELLOW}{value}{Style.RESET_ALL}"
             else:
                 return f"{Fore.RED}{value}{Style.RESET_ALL}"
+        elif len(compat_list) == 0:
+            value = ""
+            return f"{Fore.WHITE}{value}{Style.RESET_ALL}"
         else:
             value = "Not Found"
             return f"{Fore.WHITE}{value}{Style.RESET_ALL}"
@@ -209,6 +217,7 @@ class VCFCompatibility:
             if 'vmware' in key.lower() or 'amazon' in key.lower():
                 for value in server_models[key]:
                     value.update({"compatibility": ["Not Applied"]})
+                    value.update({"vcfSupportedConfirmWvendor": ""})
                 continue
             
             # Define the CPU family of each server 
@@ -276,25 +285,40 @@ class VCFCompatibility:
                 if jsondump['data']['count'] == 0:
                     for value in server_models[key]:
                         value.update({"compatibility": ["Not Found"]})
+                        value.update({"vcfSupportedConfirmWvendor": ""})
                 else:
                     for item in jsondump['data']['fieldValues']:
-                        if 'cpuSeries' in item:
-                            for cpu in item['cpuSeries']:
-                                for cpu_to_search in cpu_family:
-                                    search_words = cpu_to_search.lower().split()
-                                    cpu_name = cpu['name'].lower()
-                                    if all(word in cpu_name for word in search_words):
-                                    # get esxi version
-                                        esxi_list = [esxi['name'] for esxi in item['supportedReleases']]
-                                        for value in server_models[key]:
-                                            value.update({"compatibility": esxi_list})
-                                        break  
-                                    else:
-                                        for value in server_models[key]:
-                                            if(value.get('compatibility')):
-                                                break
-                                            else:
-                                                value.update({"compatibility": "Not Found"})                   
+                        update_data = {}
+
+                        compatibility = "Not Found"
+                        
+                        for cpu in item['cpuSeries']:
+                            cpu_name = cpu['name'].lower()
+
+                            for cpu_to_search in cpu_family:
+                                search_words = cpu_to_search.lower().split()
+
+                            if all(word in cpu_name for word in search_words):
+                                compatibility = [esxi['name'] for esxi in item['supportedReleases']]
+                                break
+
+                        if compatibility != "Not Found":
+                            break
+
+                    update_data["compatibility"] = compatibility
+
+                    for supportVendor in item['vcfSupportedConfirmWvendor']:
+                        if(supportVendor['name'] == ""):
+                            update_data["vcfSupportedConfirmWvendor"] = ""
+                        else:
+                            esxivendor_list = supportVendor['name'].split('\n')[0].split(',')
+                            esxivendor_list = [v.strip() for v in esxivendor_list]
+                            update_data["vcfSupportedConfirmWvendor"] = esxivendor_list
+
+                    if update_data:
+                        for value in server_models[key]:
+                            value.update(update_data)
+                              
             except requests.exceptions.RequestException as e:
                 print(f"[-] Error retrieving properties {e}")
                 return {} 
@@ -315,7 +339,7 @@ class VCFCompatibility:
             writer = csv.writer(f)
             
             # Write header
-            writer.writerow(['Hostname', 'Model', 'CPU', 'Compatibility'])
+            writer.writerow(['Hostname', 'Model', 'CPU', 'Compatibility', 'VCFSupportedConfirmVendor'])
             
             # Write data
             for server_model, items in data.items():
@@ -324,8 +348,8 @@ class VCFCompatibility:
                     cpu = item['cpu']
                     # Join compatibility list into a single string
                     compatibility = ', '.join(item['compatibility']) if isinstance(item['compatibility'], list) else item['compatibility']
-                    
-                    writer.writerow([hostname, server_model, cpu, compatibility])
+                    vendorSupported = ', '.join(item['vcfSupportedConfirmWvendor']) if isinstance(item['vcfSupportedConfirmWvendor'], list) else item['vcfSupportedConfirmWvendor']
+                    writer.writerow([hostname, server_model, cpu, compatibility, vendorSupported])
         
         print("\n")
         print(f"{Fore.GREEN}[+] Data exported to {filename}{Style.RESET_ALL}")
@@ -351,7 +375,6 @@ Examples:
     parser.add_argument(
         '-u', '--username',
         required=False,
-     
         help='Aria Operations username'
     )
     parser.add_argument(
@@ -439,14 +462,15 @@ Examples:
     # Prepare table for output
     table = []
     idx = 1
-    headers = ["#", "Server Model", "CPU", "Quantity", "Compatibility"]
+    headers = ["#", "Server Model", "CPU", "Quantity", "Compatibility", "VCFSupportedConfirmWithVendor"]
     for key in server_models:
         for item in server_models[key]:
-            cpu_data = defaultdict(lambda: {"count": 0, "compatibility": set()})
+            cpu_data = defaultdict(lambda: {"count": 0, "compatibility": set(), "vcfSupportedConfirmWvendor": ""})
             
             for item in server_models[key]:
                 cpu = item["cpu"]
                 cpu_data[cpu]["count"] += 1
+                cpu_data[cpu]["vcfSupportedConfirmWvendor"] = item["vcfSupportedConfirmWvendor"]
                 
                 if isinstance(item['compatibility'], list):
                     cpu_data[cpu]["compatibility"].update(item['compatibility'])
@@ -456,13 +480,15 @@ Examples:
         for cpu, data in cpu_data.items():
             # Convert set to sorted list
             compat_list = sorted(data["compatibility"])
-                
+            vendorConfirmed = sorted(data["vcfSupportedConfirmWvendor"])
+            
             table.append([
                 idx,
                 key,
                 cpu,
                 data["count"],
-                compatibility_client.color_compat(compat_list)
+                compatibility_client.color_compat(compat_list),
+                compatibility_client.color_compat(vendorConfirmed)
             ])
             idx += 1 
             
@@ -545,5 +571,6 @@ Examples:
         compatibility_client.export_data(server_models)
     
 if __name__ == '__main__':
-    _print_banner()
+    __VERSION__ = "1.1"
+    _print_banner(__VERSION__)
     main()
