@@ -1,1 +1,2 @@
-machine01
+vmteste01
+vmteste02
